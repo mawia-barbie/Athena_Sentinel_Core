@@ -121,6 +121,8 @@ async def process_nvd(session: aiohttp.ClientSession, db, counters: dict | None 
     # v2 API returns 'vulnerabilities' top-level list
     cves = data.get('vulnerabilities', [])
 
+    logger.info('NVD returned %s vulnerabilities', len(cves))
+
     for item in cves:
         try:
             cve = item.get('cve', {})
@@ -129,10 +131,12 @@ async def process_nvd(session: aiohttp.ClientSession, db, counters: dict | None 
             desc = descriptions[0].get('value', '') if descriptions else ''
 
             if not cve_id or not desc:
+                logger.debug('Skipping CVE due to missing id/description: id=%s desc_len=%s', cve_id, len(desc) if desc is not None else 0)
                 continue
 
             # skip junk/demo
             if 'demo' in desc.lower():
+                logger.debug('Skipping demo CVE %s', cve_id)
                 continue
 
             impact = item.get('impact', {})
@@ -158,8 +162,7 @@ async def process_nvd(session: aiohttp.ClientSession, db, counters: dict | None 
 
             if existing:
                 if SCRAPER_DEBUG:
-                    logger.debug('SCRAPER_DEBUG: skipping dedupe for existing CVE %s', cve_id)
-                    # in debug mode we allow inserts to verify ingestion, so do not continue
+                    logger.debug('SCRAPER_DEBUG: existing CVE found (will still attempt insert in debug) %s', cve_id)
                 else:
                     # attempt a lightweight update if fields changed
                     changed = False
@@ -194,25 +197,32 @@ async def process_nvd(session: aiohttp.ClientSession, db, counters: dict | None 
                                 await db.rollback()
                             except Exception:
                                 pass
-                continue
+                    continue
 
-            t = await create_threat(
-                db,
-                title=cve_id,
-                description=desc[:2000],
-                type_="CVE",
-                severity=severity,
-                source="NVD",
-                tags=tags,
-                external_id=cve_id,
-                source_url=url
-            )
+            try:
+                t = await create_threat(
+                    db,
+                    title=cve_id,
+                    description=desc[:2000],
+                    type_="CVE",
+                    severity=severity,
+                    source="NVD",
+                    tags=tags,
+                    external_id=cve_id,
+                    source_url=url
+                )
 
-            created.append({
-                "id": t.id,
-                "external_id": cve_id
-            })
-            counters['inserted'] = counters.get('inserted', 0) + 1
+                created.append({
+                    "id": t.id,
+                    "external_id": cve_id
+                })
+                counters['inserted'] = counters.get('inserted', 0) + 1
+            except Exception as e:
+                logger.exception('Failed to create threat for %s: %s', cve_id, e)
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
 
         except Exception as e:
             logger.exception("Error processing CVE item: %s", e)
@@ -232,14 +242,17 @@ async def process_rss(session: aiohttp.ClientSession, db, url: str, counters: di
         import feedparser
         parsed = feedparser.parse(text)
         entries = parsed.get('entries', [])
+        logger.info('RSS %s returned %s entries', url, len(entries))
         for e in entries[:20]:
             title = e.get('title')
             summary = e.get('summary') or e.get('description') or ''
             link = e.get('link')
             # skip demo-like entries
             if title and 'demo' in title.lower():
+                logger.debug('Skipping demo feed title %s', title)
                 continue
             if summary and 'demo' in summary.lower():
+                logger.debug('Skipping demo feed summary for %s', link)
                 continue
             tags = extract_tags(title + ' ' + summary)
             # dedupe by URL
