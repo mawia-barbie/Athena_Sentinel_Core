@@ -54,174 +54,188 @@ export default function Threats({ navigate }) {
   const [lastRun, setLastRun] = useState(null)
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null)
   const [secondsSinceUpdate, setSecondsSinceUpdate] = useState(0)
+  const [page, setPage] = useState(1)
+  const [hasNext, setHasNext] = useState(false)
 
-  useEffect(() => {
-    // initial load from backend (list endpoint)
-    apiFetch('/api/threats?limit=50').then(d=>{
-      if(d && d.items) {
-        // ensure newest-first ordering
-        const sorted = d.items.sort((a,b)=> (b.timestamp||0) - (a.timestamp||0))
-        setEntries(sorted)
-      }
-    }).catch(e=>console.error('[Threats] load error', e))
+   const PAGE_SIZE = 50
 
-    // sync scraper status from backend so UI controls reflect server state
-    apiFetch('/api/threats/scraper/status').then(s=>{
-      if (s && typeof s.running !== 'undefined') setRunning(!!s.running)
-    }).catch(()=>{})
+   useEffect(() => {
+     // initial load from backend (page 1 = newest)
+     fetchPage(1).catch(e=>console.error('[Threats] load error', e))
 
-    return () => {}
-  }, [])
+     // sync scraper status from backend so UI controls reflect server state
+     apiFetch('/api/threats/scraper/status').then(s=>{
+       if (s && typeof s.running !== 'undefined') setRunning(!!s.running)
+     }).catch(()=>{})
 
-  useEffect(() => {
-    let timer
-    if (running) {
-      // poll backend feed every 10s
-      const fetchFeed = async () => {
-        try {
-          const items = await apiFetch('/api/threats/feed')
-          if (Array.isArray(items)) {
-            // ensure newest-first ordering
-            const sorted = items.sort((a,b)=> (b.timestamp||0) - (a.timestamp||0))
-            setEntries(sorted)
-            const now = new Date()
-            setLastRun(now)
-            setLastUpdatedAt(now)
-            setSecondsSinceUpdate(0)
-          }
-        } catch (err) {
-          console.error('[Threats] feed poll error', err)
-        }
-      }
-      fetchFeed()
-      timer = setInterval(fetchFeed, 10000)
-    }
-    return () => {
-      clearInterval(timer)
-    }
-  }, [running])
+     return () => {}
+   }, [])
 
-  // update 'seconds since last update' clock
-  useEffect(() => {
-    const t = setInterval(()=>{
-      if (lastUpdatedAt) {
-        setSecondsSinceUpdate(Math.floor((Date.now() - lastUpdatedAt.getTime())/1000))
-      }
-    }, 1000)
-    return () => clearInterval(t)
-  }, [lastUpdatedAt])
+   // Poll only when scraper is running AND we're viewing page 1. This avoids jumping back
+   // to page 1 if the user is browsing older pages.
+   useEffect(() => {
+     let timer
+     if (running && page === 1) {
+       const fetchFeed = async () => {
+         try {
+           await fetchPage(1)
+           const now = new Date()
+           setLastRun(now)
+           setLastUpdatedAt(now)
+           setSecondsSinceUpdate(0)
+         } catch (err) {
+           console.error('[Threats] feed poll error', err)
+         }
+       }
+       fetchFeed()
+       timer = setInterval(fetchFeed, 10000)
+     }
+     return () => {
+       if (timer) clearInterval(timer)
+     }
+   }, [running, page])
 
-  async function startStop() {
-    try {
-      if (!running) {
-        // request server to start background scraper loop
-        const res = await apiFetch('/api/threats/scraper/start', { method: 'POST' })
-        if (res && (res.started || res.started === undefined)) {
-          setRunning(true)
-        } else if (res && res.message === 'already running') {
-          setRunning(true)
-        } else {
-          // fallback: still set running true so UI polling begins
-          setRunning(true)
-        }
-      } else {
-        // stop server scraper
-        const res = await apiFetch('/api/threats/scraper/stop', { method: 'POST' })
-        if (res && res.stopped) setRunning(false)
-        else setRunning(false)
-      }
-    } catch (err) {
-      console.error('[Threats] startStop error', err)
-      // toggle local state conservatively
-      setRunning(r => !r)
-    }
-  }
+   // update 'seconds since last update' clock
+   useEffect(() => {
+     const t = setInterval(()=>{
+       if (lastUpdatedAt) {
+         setSecondsSinceUpdate(Math.floor((Date.now() - lastUpdatedAt.getTime())/1000))
+       }
+     }, 1000)
+     return () => clearInterval(t)
+   }, [lastUpdatedAt])
 
-  function addKeyword(e) {
-    e.preventDefault()
-    const f = new FormData(e.target)
-    const k = f.get('keyword')?.toString().trim() 
-    if (k && !keywords.includes(k)) setKeywords(prev => [...prev, k])
-    e.target.reset()
-  }
+   async function startStop() {
+     try {
+       if (!running) {
+         // request server to start background scraper loop
+         const res = await apiFetch('/api/threats/scraper/start', { method: 'POST' })
+         if (res && (res.started || res.started === undefined)) {
+           setRunning(true)
+         } else if (res && res.message === 'already running') {
+           setRunning(true)
+         } else {
+           // fallback: still set running true so UI polling begins
+           setRunning(true)
+         }
+       } else {
+         // stop server scraper
+         const res = await apiFetch('/api/threats/scraper/stop', { method: 'POST' })
+         if (res && res.stopped) setRunning(false)
+         else setRunning(false)
+       }
+     } catch (err) {
+       console.error('[Threats] startStop error', err)
+       // toggle local state conservatively
+       setRunning(r => !r)
+     }
+   }
 
-  async function manualRun() {
-    try {
-      // trigger backend scraper once and then refresh feed
-      await apiFetch('/api/threats/scrape', { method: 'POST' })
-      const items = await apiFetch('/api/threats/feed')
-      if (Array.isArray(items)) {
-        const sorted = items.sort((a,b)=> (b.timestamp||0) - (a.timestamp||0))
-        setEntries(sorted)
-      }
-      const now = new Date()
-      setLastRun(now)
-      setLastUpdatedAt(now)
-      setSecondsSinceUpdate(0)
-    } catch (err) {
-      console.error('[Threats] manual scrape error', err)
-    }
-  }
+   function addKeyword(e) {
+     e.preventDefault()
+     const f = new FormData(e.target)
+     const k = f.get('keyword')?.toString().trim() 
+     if (k && !keywords.includes(k)) setKeywords(prev => [...prev, k])
+     e.target.reset()
+   }
 
-  const handleNavigate = (to) => go(to)
+   async function manualRun() {
+     try {
+       // trigger backend scraper once and then refresh feed
+       await apiFetch('/api/threats/scrape', { method: 'POST' })
+       // refresh page 1 after manual run
+       await fetchPage(1)
+       const now = new Date()
+       setLastRun(now)
+       setLastUpdatedAt(now)
+       setSecondsSinceUpdate(0)
+     } catch (err) {
+       console.error('[Threats] manual scrape error', err)
+     }
+   }
 
-  const handleSearch = (q) => {
-    apiFetch('/api/threats/search?q='+encodeURIComponent(q)).then(d=>{
-      if(d && d.items) setEntries(d.items)
-    })
-  }
+   // fetch a specific page (page 1 = newest)
+   async function fetchPage(p) {
+     const off = (p - 1) * PAGE_SIZE
+     const res = await apiFetch(`/api/threats?limit=${PAGE_SIZE}&offset=${off}`)
+     let items = []
+     if (Array.isArray(res)) items = res
+     else if (res && Array.isArray(res.items)) items = res.items
+     else {
+       console.error('[Threats] fetchPage unexpected response', res)
+       return
+     }
+     // newest-first expected from backend; set entries to this page's items
+     const sorted = items.sort((a,b)=> (b.timestamp||0) - (a.timestamp||0))
+     setEntries(sorted)
+     setPage(p)
+     setHasNext(items.length === PAGE_SIZE)
+   }
 
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-black via-gray-900 to-black text-gray-200 p-6">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4">
-            <h1 className="text-2xl font-semibold">Threat Intelligence Scraper</h1>
-            <button onClick={() => handleNavigate('/dashboard')} className="px-3 py-1 rounded bg-gray-700 text-white text-sm">Back to Dashboard</button>
-          </div>
-          <div className="text-sm text-gray-400">Last run: {lastRun ? lastRun.toLocaleString() : 'never'} {lastUpdatedAt && <span> • Updated {secondsSinceUpdate}s ago</span>}</div>
-        </div>
+   const handleNavigate = (to) => go(to)
 
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          <div className="col-span-2 bg-white/3 rounded-lg p-4">
-            <div className="flex items-center justify-between mb-4">
-              <div className="font-medium">Scraper Control</div>
-              <div className="flex items-center gap-2">
-                {/* <button onClick={manualRun} className="px-3 py-1 rounded bg-blue-600 text-white text-sm">Run now</button> */}
-                <button onClick={startStop} className={`px-3 py-1 rounded text-white text-sm ${running ? 'bg-red-600' : 'bg-green-600'}`}>{running ? 'Stop' : 'Start'}</button>
-              </div>
-            </div>
+   const handleSearch = (q) => {
+     apiFetch('/api/threats/search?q='+encodeURIComponent(q)).then(d=>{
+       if(d && d.items) setEntries(d.items)
+     })
+   }
 
-            <div>
-              <div className="text-sm text-gray-300 mb-2">Keywords</div>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {keywords.map(k => (
-                  <span key={k} className="px-2 py-1 bg-white/5 rounded text-sm">{k}</span>
-                ))}
-              </div>
+   return (
+     <div className="min-h-screen bg-gradient-to-b from-black via-gray-900 to-black text-gray-200 p-6">
+       <div className="max-w-6xl mx-auto">
+         <div className="flex items-center justify-between mb-6">
+           <div className="flex items-center gap-4">
+             <h1 className="text-2xl font-semibold">Threat Intelligence Scraper</h1>
+             <button onClick={() => handleNavigate('/dashboard')} className="px-3 py-1 rounded bg-gray-700 text-white text-sm">Back to Dashboard</button>
+           </div>
+           <div className="text-sm text-gray-400">Last run: {lastRun ? lastRun.toLocaleString() : 'never'} {lastUpdatedAt && <span> • Updated {secondsSinceUpdate}s ago</span>}</div>
+         </div>
 
-              <form onSubmit={addKeyword} className="flex gap-2">
-                <input name="keyword" placeholder="Add keyword (e.g. ransomware)" className="bg-white/5 rounded px-3 py-2 text-sm flex-1" />
-                <button type="submit" className="px-3 py-2 bg-green-600 rounded text-white text-sm">Add</button>
-              </form>
-            </div>
+         <div className="grid grid-cols-3 gap-4 mb-6">
+           <div className="col-span-2 bg-white/3 rounded-lg p-4">
+             <div className="flex items-center justify-between mb-4">
+               <div className="font-medium">Scraper Control</div>
+               <div className="flex items-center gap-2">
+                 {/* <button onClick={manualRun} className="px-3 py-1 rounded bg-blue-600 text-white text-sm">Run now</button> */}
+                 <button onClick={startStop} className={`px-3 py-1 rounded text-white text-sm ${running ? 'bg-red-600' : 'bg-green-600'}`}>{running ? 'Stop' : 'Start'}</button>
+               </div>
+             </div>
 
-          </div>
+             <div>
+               <div className="text-sm text-gray-300 mb-2">Keywords</div>
+               <div className="flex flex-wrap gap-2 mb-4">
+                 {keywords.map(k => (
+                   <span key={k} className="px-2 py-1 bg-white/5 rounded text-sm">{k}</span>
+                 ))}
+               </div>
 
-          <div className="bg-white/3 rounded-lg p-4">
-            <div className="font-medium mb-2">Scrape Settings</div>
-            <div className="text-sm text-gray-300">Polling interval: 10s</div>
-            <div className="mt-3 text-sm text-gray-300">Sources: NVD, TheHackerNews, SecurityWeek (real feeds)</div>
-          </div>
-        </div>
+               <form onSubmit={addKeyword} className="flex gap-2">
+                 <input name="keyword" placeholder="Add keyword (e.g. ransomware)" className="bg-white/5 rounded px-3 py-2 text-sm flex-1" />
+                 <button type="submit" className="px-3 py-2 bg-green-600 rounded text-white text-sm">Add</button>
+               </form>
+             </div>
 
-        <div className="bg-white/3 rounded-lg overflow-hidden">
-          <div className="p-4 border-b border-white/5 font-medium">Scraped Results</div>
-          <div className="max-h-[540px] overflow-y-auto">
-            {entries.map(e => <ThreatItem key={e.id} t={e} />)}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
+           </div>
+
+           <div className="bg-white/3 rounded-lg p-4">
+             <div className="font-medium mb-2">Scrape Settings</div>
+             <div className="text-sm text-gray-300">Polling interval: 10s</div>
+             <div className="mt-3 text-sm text-gray-300">Sources: NVD, TheHackerNews, SecurityWeek (real feeds)</div>
+           </div>
+         </div>
+
+         <div className="bg-white/3 rounded-lg overflow-hidden">
+           <div className="p-4 border-b border-white/5 font-medium">Scraped Results</div>
+           <div className="max-h-[540px] overflow-y-auto">
+             {entries.map(e => <ThreatItem key={e.id} t={e} />)}
+           </div>
+           <div className="p-4 border-t border-white/5 text-center flex items-center justify-center gap-4">
+             <button onClick={() => fetchPage(page-1)} disabled={page <= 1} className={`px-3 py-1 rounded text-white text-sm ${page > 1 ? 'bg-gray-700' : 'bg-gray-600 cursor-not-allowed'}`}>Prev</button>
+             <div className="text-sm">Page {page}</div>
+             <button onClick={() => fetchPage(page+1)} disabled={!hasNext} className={`px-3 py-1 rounded text-white text-sm ${hasNext ? 'bg-gray-700' : 'bg-gray-600 cursor-not-allowed'}`}>Next</button>
+           </div>
+         </div>
+       </div>
+     </div>
+   )
 }
