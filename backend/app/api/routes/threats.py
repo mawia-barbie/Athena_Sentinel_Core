@@ -4,6 +4,7 @@ from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.threat_service import get_feed, search_threats, list_threats, create_threat
 import logging
+import asyncio
 
 router = APIRouter()
 logger = logging.getLogger("app.api.routes.threats")
@@ -50,3 +51,45 @@ async def api_latest(limit: int = Query(20, ge=1, le=200), db: AsyncSession = De
     """Return latest threats ordered by created_at DESC"""
     items = await list_threats(db, limit=limit, offset=0)
     return [ { 'id': i.id, 'title': i.title, 'severity': i.severity, 'source': i.source, 'created_at': i.created_at.isoformat() if getattr(i, 'created_at', None) else None, 'tags': i.tags, 'url': i.url } for i in items ]
+
+@router.post('/scraper/start')
+async def api_scraper_start(request: Request):
+    """Start the background scraper loop. Safe to call multiple times."""
+    app = request.app
+    task = getattr(app.state, 'scraper_task', None)
+    if task and not task.done():
+        return {"started": False, "message": "already running"}
+    try:
+        from app.services.scraper import scraper_loop
+        app.state.scraper_task = asyncio.create_task(scraper_loop(interval=60))
+        logger.info('Scraper task started via API')
+        return {"started": True}
+    except Exception as e:
+        logger.exception('Failed to start scraper: %s', e)
+        raise HTTPException(status_code=500, detail='failed to start scraper')
+
+@router.post('/scraper/stop')
+async def api_scraper_stop(request: Request):
+    """Stop the background scraper loop if running."""
+    app = request.app
+    task = getattr(app.state, 'scraper_task', None)
+    if not task:
+        return {"stopped": False, "message": "not running"}
+    try:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        app.state.scraper_task = None
+        logger.info('Scraper task stopped via API')
+        return {"stopped": True}
+    except Exception as e:
+        logger.exception('Failed to stop scraper: %s', e)
+        raise HTTPException(status_code=500, detail='failed to stop scraper')
+
+@router.get('/scraper/status')
+async def api_scraper_status(request: Request):
+    task = getattr(request.app.state, 'scraper_task', None)
+    running = bool(task and not task.done())
+    return {"running": running}

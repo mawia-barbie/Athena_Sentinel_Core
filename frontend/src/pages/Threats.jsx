@@ -64,6 +64,12 @@ export default function Threats({ navigate }) {
         setEntries(sorted)
       }
     }).catch(e=>console.error('[Threats] load error', e))
+
+    // sync scraper status from backend so UI controls reflect server state
+    apiFetch('/api/threats/scraper/status').then(s=>{
+      if (s && typeof s.running !== 'undefined') setRunning(!!s.running)
+    }).catch(()=>{})
+
     return () => {}
   }, [])
 
@@ -105,14 +111,36 @@ export default function Threats({ navigate }) {
     return () => clearInterval(t)
   }, [lastUpdatedAt])
 
-  function startStop() {
-    setRunning(r => !r)
+  async function startStop() {
+    try {
+      if (!running) {
+        // request server to start background scraper loop
+        const res = await apiFetch('/api/threats/scraper/start', { method: 'POST' })
+        if (res && (res.started || res.started === undefined)) {
+          setRunning(true)
+        } else if (res && res.message === 'already running') {
+          setRunning(true)
+        } else {
+          // fallback: still set running true so UI polling begins
+          setRunning(true)
+        }
+      } else {
+        // stop server scraper
+        const res = await apiFetch('/api/threats/scraper/stop', { method: 'POST' })
+        if (res && res.stopped) setRunning(false)
+        else setRunning(false)
+      }
+    } catch (err) {
+      console.error('[Threats] startStop error', err)
+      // toggle local state conservatively
+      setRunning(r => !r)
+    }
   }
 
   function addKeyword(e) {
     e.preventDefault()
     const f = new FormData(e.target)
-    const k = f.get('keyword')?.toString().trim()
+    const k = f.get('keyword')?.toString().trim() 
     if (k && !keywords.includes(k)) setKeywords(prev => [...prev, k])
     e.target.reset()
   }
@@ -159,7 +187,7 @@ export default function Threats({ navigate }) {
             <div className="flex items-center justify-between mb-4">
               <div className="font-medium">Scraper Control</div>
               <div className="flex items-center gap-2">
-                <button onClick={manualRun} className="px-3 py-1 rounded bg-blue-600 text-white text-sm">Run now</button>
+                {/* <button onClick={manualRun} className="px-3 py-1 rounded bg-blue-600 text-white text-sm">Run now</button> */}
                 <button onClick={startStop} className={`px-3 py-1 rounded text-white text-sm ${running ? 'bg-red-600' : 'bg-green-600'}`}>{running ? 'Stop' : 'Start'}</button>
               </div>
             </div>
