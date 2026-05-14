@@ -1,11 +1,12 @@
-"""add updated_at to threats
+"""create threats table
 
-Revision ID: 002_add_updated_at_to_threats
+Revision ID: 002_create_threats_table
 Revises: 001
-Create Date: 2026-05-11 12:00:00.000000
+Create Date: 2026-05-14 17:40:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '002_add_updated_at_to_threats'
@@ -15,30 +16,28 @@ depends_on = None
 
 
 def upgrade():
-    # add updated_at column with default now()
-    op.add_column('threats', sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False))
+    # create threats table
+    op.create_table(
+        'threats',
+        sa.Column('id', sa.Integer, primary_key=True),
+        sa.Column('external_id', sa.String(128), nullable=True),
+        sa.Column('title', sa.String(256), nullable=False),
+        sa.Column('description', sa.String(2048), nullable=True),
+        sa.Column('type', sa.String(64), nullable=False),
+        sa.Column('severity', sa.String(16), nullable=False),
+        sa.Column('source', sa.String(128), nullable=True),
+        sa.Column('url', sa.String(512), nullable=True),
+        sa.Column('tags', postgresql.JSONB, nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    )
 
-    # create function and trigger to auto-update 'updated_at' on row UPDATE
-    op.execute("""
-    CREATE OR REPLACE FUNCTION update_updated_at_column()
-    RETURNS TRIGGER AS $$
-    BEGIN
-        NEW.updated_at = NOW();
-        RETURN NEW;
-    END;
-    $$ language 'plpgsql';
-    """)
-
-    op.execute("""
-    CREATE TRIGGER update_threats_updated_at
-    BEFORE UPDATE ON threats
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-    """)
+    # indexes
+    op.create_index('ix_threats_external_id', 'threats', ['external_id'], unique=False)
+    op.create_index('ix_threats_type_severity', 'threats', ['type', 'severity'], unique=False)
 
 
 def downgrade():
-    # drop trigger and function, then drop column
-    op.execute("DROP TRIGGER IF EXISTS update_threats_updated_at ON threats;")
-    op.execute("DROP FUNCTION IF EXISTS update_updated_at_column();")
-    op.drop_column('threats', 'updated_at')
+    op.drop_index('ix_threats_type_severity', table_name='threats')
+    op.drop_index('ix_threats_external_id', table_name='threats')
+    op.drop_table('threats')

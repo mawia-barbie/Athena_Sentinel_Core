@@ -190,6 +190,10 @@ async def process_nvd(session: aiohttp.ClientSession, db, counters: dict | None 
                             logger.info('Updated existing CVE %s', cve_id)
                         except Exception as e:
                             logger.exception('Failed to update existing CVE %s: %s', cve_id, e)
+                            try:
+                                await db.rollback()
+                            except Exception:
+                                pass
                 continue
 
             t = await create_threat(
@@ -212,6 +216,10 @@ async def process_nvd(session: aiohttp.ClientSession, db, counters: dict | None 
 
         except Exception as e:
             logger.exception("Error processing CVE item: %s", e)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
     return created
 async def process_rss(session: aiohttp.ClientSession, db, url: str, counters: dict | None = None) -> List[dict]:
@@ -258,6 +266,10 @@ async def process_rss(session: aiohttp.ClientSession, db, url: str, counters: di
                             logger.info('Updated existing feed item %s', link)
                         except Exception as e:
                             logger.exception('Failed to update existing feed item %s: %s', link, e)
+                            try:
+                                await db.rollback()
+                            except Exception:
+                                pass
                     continue
             severity = 'Medium'
             type_ = 'News'
@@ -266,6 +278,10 @@ async def process_rss(session: aiohttp.ClientSession, db, url: str, counters: di
             counters['inserted'] = counters.get('inserted', 0) + 1
     except Exception as e:
         logger.exception('RSS processing failed for %s: %s', url, e)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
     return created
 
 async def scrape_once() -> List[dict]:
