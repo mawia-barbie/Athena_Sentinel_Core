@@ -15,7 +15,7 @@ logger = logging.getLogger("app.services.scraper")
 
 NVD_API_KEY = os.getenv("NVD_API_KEY")
 # enable debug mode to bypass dedupe and emit extra logs during development
-SCRAPER_DEBUG = True
+SCRAPER_DEBUG = os.getenv("SCRAPER_DEBUG", "false").lower() == 'true'
 logger.info(f"NVD KEY LOADED: {bool(NVD_API_KEY)} | SCRAPER_DEBUG={SCRAPER_DEBUG}")
 # Data sources (real)
 # NVD JSON feeds (recent CVE) - example: last modified feed; NVD provides JSON files per year and modified
@@ -161,43 +161,43 @@ async def process_nvd(session: aiohttp.ClientSession, db, counters: dict | None 
             existing = q.scalars().first()
 
             if existing:
-                if SCRAPER_DEBUG:
-                    logger.debug('SCRAPER_DEBUG: existing CVE found (will still attempt insert in debug) %s', cve_id)
-                else:
-                    # attempt a lightweight update if fields changed
-                    changed = False
-                    if existing.title != cve_id:
-                        existing.title = cve_id
-                        changed = True
-                    # limit description size
-                    new_desc = desc[:2000]
-                    if existing.description != new_desc:
-                        existing.description = new_desc
-                        changed = True
-                    if existing.severity != severity:
-                        existing.severity = severity
-                        changed = True
-                    if existing.source != 'NVD':
-                        existing.source = 'NVD'
-                        changed = True
-                    if existing.url != url:
-                        existing.url = url
-                        changed = True
-                    if existing.tags != tags:
-                        existing.tags = tags
-                        changed = True
-                    if changed:
+                logger.debug('Existing CVE found %s -- attempting lightweight update if needed', cve_id)
+                # attempt a lightweight update if fields changed
+                changed = False
+                if existing.title != cve_id:
+                    existing.title = cve_id
+                    changed = True
+                # limit description size
+                new_desc = desc[:2000]
+                if existing.description != new_desc:
+                    existing.description = new_desc
+                    changed = True
+                if existing.severity != severity:
+                    existing.severity = severity
+                    changed = True
+                if existing.source != 'NVD':
+                    existing.source = 'NVD'
+                    changed = True
+                if existing.url != url:
+                    existing.url = url
+                    changed = True
+                if existing.tags != tags:
+                    existing.tags = tags
+                    changed = True
+                if changed:
+                    try:
+                        await db.commit()
+                        counters['updated'] = counters.get('updated', 0) + 1
+                        logger.info('Updated existing CVE %s', cve_id)
+                    except Exception as e:
+                        logger.exception('Failed to update existing CVE %s: %s', cve_id, e)
                         try:
-                            await db.commit()
-                            counters['updated'] = counters.get('updated', 0) + 1
-                            logger.info('Updated existing CVE %s', cve_id)
-                        except Exception as e:
-                            logger.exception('Failed to update existing CVE %s: %s', cve_id, e)
-                            try:
-                                await db.rollback()
-                            except Exception:
-                                pass
-                    continue
+                            await db.rollback()
+                        except Exception:
+                            pass
+                else:
+                    logger.debug('No changes for existing CVE %s', cve_id)
+                continue
 
             try:
                 t = await create_threat(
