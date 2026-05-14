@@ -3,6 +3,7 @@ from typing import List, Optional
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.threat import Threat
+from datetime import datetime, timezone
 
 logger = logging.getLogger("app.services.threat_service")
 
@@ -10,8 +11,18 @@ async def create_threat(db: AsyncSession, title: str, description: str, type_: s
     logger.info("Creating threat title=%s type=%s severity=%s external_id=%s", title, type_, severity, external_id)
     t = Threat(title=title, description=description, type=type_, severity=severity, source=source, url=source_url, external_id=external_id, tags=tags or [])
     db.add(t)
-    await db.commit()
-    await db.refresh(t)
+    try:
+        await db.commit()
+        await db.refresh(t)
+    except Exception as e:
+        # rollback the session to clear failed transaction state
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        logger.exception("Failed to commit new threat: %s", e)
+        raise
+
     logger.info("Created threat id=%s", t.id)
     # structured new threat logging
     try:
@@ -34,7 +45,6 @@ async def get_feed(db: AsyncSession, limit: int = 50, since: Optional[int] = Non
     q = select(Threat).order_by(Threat.created_at.desc()).limit(limit)
     if since:
         # since is expected as epoch milliseconds
-        from datetime import datetime, timezone
         dt = datetime.fromtimestamp(since/1000.0, tz=timezone.utc)
         q = select(Threat).where(Threat.created_at > dt).order_by(Threat.created_at.desc()).limit(limit)
     res = await db.execute(q)

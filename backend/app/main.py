@@ -119,40 +119,49 @@ print("THREATS ROUTER REGISTERED")
 @app.on_event('startup')
 async def startup():
     # create tables (synchronously for initial scaffolding)
+    created_ok = False
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        created_ok = True
+        logger.info("Database tables ensured (create_all succeeded)")
     except Exception as e:
-        # log the error and continue so the app can start for debugging; fix DB permissions separately
-        logger.warning("Could not create database tables on startup: %s", e)
+        # log the error and do NOT continue to start the scraper — require developer to fix DB/migrations
+        logger.exception("Could not create database tables on startup; skipping scraper startup and schema patches: %s", e)
 
     # -- ensure dev-time compatibility: add recently-introduced columns if they don't exist
-    try:
-        from sqlalchemy import text
-        async with engine.begin() as conn:
-            for col, ddl in [
-                ("external_id", "ALTER TABLE threats ADD COLUMN external_id VARCHAR;"),
-                ("url", "ALTER TABLE threats ADD COLUMN url VARCHAR;"),
-                ("tags", "ALTER TABLE threats ADD COLUMN tags JSONB;")
-            ]:
-                try:
-                    q = await conn.execute(text(
-                        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='threats' AND column_name = :col)"
-                    ), {"col": col})
-                    exists = q.scalar()
-                    if not exists:
-                        logger.info('Adding missing column %s to threats table', col)
-                        await conn.execute(text(ddl))
-                except Exception as inner:
-                    logger.debug('Error checking/adding column %s: %s', col, inner)
-    except Exception as e:
-        logger.debug('Schema compatibility check skipped: %s', e)
+    if created_ok:
+        try:
+            from sqlalchemy import text
+            async with engine.begin() as conn:
+                for col, ddl in [
+                    ("external_id", "ALTER TABLE threats ADD COLUMN external_id VARCHAR;"),
+                    ("url", "ALTER TABLE threats ADD COLUMN url VARCHAR;"),
+                    ("tags", "ALTER TABLE threats ADD COLUMN tags JSONB;")
+                ]:
+                    try:
+                        q = await conn.execute(text(
+                            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='threats' AND column_name = :col)"
+                        ), {"col": col})
+                        exists = q.scalar()
+                        if not exists:
+                            logger.info('Adding missing column %s to threats table', col)
+                            await conn.execute(text(ddl))
+                    except Exception as inner:
+                        logger.debug('Error checking/adding column %s: %s', col, inner)
+        except Exception as e:
+            logger.debug('Schema compatibility check skipped: %s', e)
+    else:
+        logger.warning('Skipping schema compatibility checks because DB initialization failed')
 
-    # start scraper background task
-    try:
-        app.state.scraper_task = asyncio.create_task(scraper_loop(interval=60))
-    except Exception as e:
-        logger.warning('Could not start scraper loop: %s', e)
+    # start scraper background task only if DB tables were ensured
+    if created_ok:
+        try:
+            app.state.scraper_task = asyncio.create_task(scraper_loop(interval=60))
+        except Exception as e:
+            logger.warning('Could not start scraper loop: %s', e)
+    else:
+        logger.warning('Scraper loop not started because DB initialization failed. Run migrations or ensure DB is reachable.')
 
     # Log registered routes for debugging
     try:
