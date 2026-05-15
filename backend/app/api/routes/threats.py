@@ -13,7 +13,7 @@ logger = logging.getLogger("app.api.routes.threats")
 async def api_feed(limit: int = Query(50, ge=1, le=500), since: Optional[int] = None, db: AsyncSession = Depends(get_db), request: Request = None):
     logger.info("GET /api/threats/feed from=%s limit=%s", request.client.host if request and request.client else 'unknown', limit)
     items = await get_feed(db, limit=limit, since=since)
-    return [ {"id": i.id, "title": i.title, "description": i.description, "type": i.type, "severity": i.severity, "source": i.source, "tags": i.tags, "timestamp": int(i.created_at.timestamp()*1000) } for i in items ]
+    return [ {"id": i.id, "title": i.title, "description": i.description, "type": i.type, "severity": i.severity, "source": i.source, "tags": i.tags, "timestamp": int(i.created_at.timestamp()*1000), "url": i.url } for i in items ]
 
 # register the list endpoint for both the prefix without a trailing slash and with one
 @router.get('', include_in_schema=False)
@@ -21,13 +21,13 @@ async def api_feed(limit: int = Query(50, ge=1, le=500), since: Optional[int] = 
 async def api_list(type: Optional[str] = None, limit: int = Query(50, ge=1, le=500), offset: int = 0, db: AsyncSession = Depends(get_db), request: Request = None):
     logger.info("GET /api/threats list type=%s limit=%s offset=%s", type, limit, offset)
     items = await list_threats(db, type_=type, limit=limit, offset=offset)
-    return {"items": [ {"id": i.id, "title": i.title, "description": i.description, "type": i.type, "severity": i.severity, "source": i.source, "tags": i.tags, "timestamp": int(i.created_at.timestamp()*1000) } for i in items ], "total": len(items)}
+    return {"items": [ {"id": i.id, "title": i.title, "description": i.description, "type": i.type, "severity": i.severity, "source": i.source, "tags": i.tags, "timestamp": int(i.created_at.timestamp()*1000), "url": i.url } for i in items ], "total": len(items)}
 
 @router.get('/search')
 async def api_search(q: str, limit: int = Query(50, ge=1, le=500), offset: int = 0, db: AsyncSession = Depends(get_db), request: Request = None):
     logger.info("GET /api/threats/search q=%s limit=%s", q, limit)
     items = await search_threats(db, q, limit=limit, offset=offset)
-    return {"items": [ {"id": i.id, "title": i.title, "description": i.description, "type": i.type, "severity": i.severity, "source": i.source, "tags": i.tags, "timestamp": int(i.created_at.timestamp()*1000) } for i in items ], "total": len(items)}
+    return {"items": [ {"id": i.id, "title": i.title, "description": i.description, "type": i.type, "severity": i.severity, "source": i.source, "tags": i.tags, "timestamp": int(i.created_at.timestamp()*1000), "url": i.url } for i in items ], "total": len(items)}
 
 @router.post('/')
 async def api_create(payload: dict, db: AsyncSession = Depends(get_db), request: Request = None):
