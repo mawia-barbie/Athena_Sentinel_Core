@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import AnalyticsChart from './AnalyticsChart'
+import { apiFetch } from '../lib/api'
 
 function StatCard({ title, value }) {
   return (
@@ -33,22 +35,55 @@ export default function Analytics({ navigate }) {
 
   const [stats, setStats] = useState({ total: 0, high: 0, medium: 0, low: 0 })
   const [timeline, setTimeline] = useState([])
+  const [distribution, setDistribution] = useState({})
+  const [daysWindow, setDaysWindow] = useState(7)
+  const [loadingDist, setLoadingDist] = useState(false)
+  const [recentVulns, setRecentVulns] = useState([])
+  const [vulnDist, setVulnDist] = useState([])
 
   useEffect(() => {
-    console.log('[Analytics] mount')
-    const now = Date.now()
-    const mock = [
-      { id:1, title: 'CVE-2024-1234', source: 'CVE', severity: 'High', timestamp: now - 1000*60*60 },
-      { id:2, title: 'Ransomware campaign', source: 'ThreatFeed', severity: 'High', timestamp: now - 1000*60*30 },
-      { id:3, title: 'Phishing spike', source: 'Blog', severity: 'Medium', timestamp: now - 1000*60*10 },
-    ]
-    setTimeline(mock)
-    const h = mock.filter(m=>m.severity==='High').length
-    const m = mock.filter(m=>m.severity==='Medium').length
-    const l = mock.filter(m=>m.severity==='Low').length
-    setStats({ total: mock.length, high: h, medium: m, low: l })
-    return () => console.log('[Analytics] unmount')
+    // load real timeline and distribution
+    const load = async () => {
+      try {
+        const t = await apiFetch('/api/analytics/timeline?limit=50')
+        setTimeline(t)
+        const counts = { high: 0, medium: 0, low: 0 }
+        t.forEach(it => { if (it.severity==='High') counts.high++; else if (it.severity==='Medium') counts.medium++; else counts.low++ })
+        setStats({ total: t.length, high: counts.high, medium: counts.medium, low: counts.low })
+        // fetch recent vulnerabilities for specificity
+        try {
+          const v = await apiFetch('/api/analytics/vulnerabilities?limit=20')
+          setRecentVulns(v)
+          // load vulnerability distribution for charting specific CVEs
+          try {
+            const vd = await apiFetch(`/api/analytics/vulnerability-distribution?days=${daysWindow}&limit=10`)
+            if (vd && vd.items) setVulnDist(vd.items)
+          } catch (e) {
+            console.error('failed to load vuln distribution', e)
+          }
+        } catch (e) {
+          console.error('failed to load recent vulnerabilities', e)
+        }
+      } catch (err) {
+        console.error('[Analytics] timeline load error', err)
+      }
+    }
+    load()
+    loadDistribution(daysWindow)
+    return () => {}
   }, [])
+
+  async function loadDistribution(days) {
+    setLoadingDist(true)
+    try {
+      const d = await apiFetch(`/api/analytics/type-distribution?days=${days}`)
+      if (d && d.counts) setDistribution(d.counts)
+    } catch (err) {
+      console.error('[Analytics] distribution load error', err)
+    } finally {
+      setLoadingDist(false)
+    }
+  }
 
   function exportJSON() {
     console.log('[Analytics] exportJSON')
@@ -86,15 +121,40 @@ export default function Analytics({ navigate }) {
         </div>
 
         <div className="bg-white/3 rounded-lg p-4 mb-6">
-          <div className="font-medium mb-2">Attack types distribution (mock)</div>
-          <div className="flex items-center gap-6">
-            <div className="w-40 h-40 rounded-full bg-white/5 flex items-center justify-center">
-              <div className="text-sm text-white">Pie (placeholder)</div>
+          <div className="font-medium mb-2">Attack types distribution</div>
+          <div className="flex flex-col md:flex-row items-start gap-6">
+            <div className="flex-1">
+              {loadingDist ? <div className="text-sm text-gray-300">Loading chart...</div> : (() => {
+                // Prepare chart data: if we have vulnerability breakdown, expand it into top CVEs + Other
+                const dist = { ...(distribution || {}) }
+                const vulnTotal = dist['Vulnerability'] || 0
+                if (vulnTotal > 0 && vulnDist && vulnDist.length > 0) {
+                  // take top 5 CVEs
+                  const top = vulnDist.slice(0,5)
+                  let topSum = 0
+                  top.forEach(v => { topSum += v.count })
+                  const remainder = Math.max(0, vulnTotal - topSum)
+                  // remove generic Vulnerability bucket
+                  delete dist['Vulnerability']
+                  // insert CVE entries
+                  top.forEach(v => { dist[v.external_id || v.title] = v.count })
+                  if (remainder > 0) dist['Other Vulnerabilities'] = remainder
+                }
+                return <AnalyticsChart data={dist} />
+              })()}
             </div>
-            <div className="text-sm text-gray-300">
-              <div>Ransomware: 40%</div>
-              <div>Exploit: 35%</div>
-              <div>Phishing: 25%</div>
+            <div className="text-sm text-gray-300 w-48">
+              <div className="mb-2">Window:
+                <select value={daysWindow} onChange={(e)=>{ const v = parseInt(e.target.value); setDaysWindow(v); loadDistribution(v) }} className="ml-2 bg-black/20 rounded px-2 py-1">
+                  <option value={1}>24h</option>
+                  <option value={7}>7d</option>
+                  <option value={30}>30d</option>
+                </select>
+              </div>
+              {Object.keys(distribution).length === 0 && !loadingDist && <div className="text-sm">No data</div>}
+              {Object.entries(distribution).map(([k,v])=> (
+                <div key={k} className="flex justify-between"><div>{k}</div><div>{v}</div></div>
+              ))}
             </div>
           </div>
         </div>
@@ -105,6 +165,35 @@ export default function Analytics({ navigate }) {
             {timeline.map(t => <TimelineItem key={t.id} t={t} />)}
           </div>
         </div>
+        <div className="bg-white/3 rounded-lg p-4 mt-6">
+          <div className="font-medium mb-2">Recent Vulnerabilities (CVE)</div>
+          <div className="max-h-[240px] overflow-y-auto text-sm">
+            <table className="w-full">
+              <thead className="text-left text-xs text-gray-400"><tr><th>ID</th><th>Title</th><th>Severity</th></tr></thead>
+              <tbody>
+                {recentVulns.map(v => (
+                  <tr key={v.id} className="border-t border-white/5"><td className="py-2 pr-4"><a href={v.url} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">{v.external_id || v.title}</a></td><td>{v.title}</td><td>{v.severity}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {vulnDist.length > 0 && (
+          <div className="bg-white/3 rounded-lg p-4 mb-6">
+            <div className="font-medium mb-2">Top Vulnerabilities (by count)</div>
+            <div className="max-h-[240px] overflow-y-auto text-sm">
+              <table className="w-full">
+                <thead className="text-left text-xs text-gray-400"><tr><th>CVE</th><th>Title</th><th>Count</th></tr></thead>
+                <tbody>
+                  {vulnDist.map(v => (
+                    <tr key={v.external_id} className="border-t border-white/5"><td className="py-2 pr-4"><a href={`https://nvd.nist.gov/vuln/detail/${v.external_id}`} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">{v.external_id}</a></td><td>{v.title}</td><td>{v.count}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

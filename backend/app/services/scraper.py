@@ -60,6 +60,40 @@ def extract_tags(text: str) -> List[str]:
             tags.append(k)
     return tags
 
+# map keywords/tags to higher-level threat types used in analytics/UI
+TYPE_KEYWORDS = {
+    'Ransomware': ['ransomware'],
+    'Phishing': ['phish', 'phishing'],
+    'Exploit': ['exploit', 'rce', 'xss', 'sql', 'remote code execution', 'use-after-free'],
+    'Malware': ['malware', 'trojan', 'worm'],
+    'Vulnerability': ['vulnerability', 'cve', 'vuln', 'buffer overflow', 'denial of service', 'dos'],
+    'Credentials': ['credential', 'password', 'leak', 'breach'],
+}
+
+def infer_type_from_text(text: str, tags: List[str]) -> str:
+    """Return an inferred threat type based on tags and free text heuristics."""
+    txt = (text or '').lower()
+    # prefer tag signals
+    for t in tags:
+        if t == 'ransomware':
+            return 'Ransomware'
+        if t == 'phishing':
+            return 'Phishing'
+        if t == 'malware':
+            return 'Malware'
+        if t == 'cve' or t == 'vulnerability':
+            return 'Vulnerability'
+        if t == 'exploit' or t in ('rce','xss','sql'):
+            return 'Exploit'
+
+    # fall back to keyword scanning
+    for typ, kws in TYPE_KEYWORDS.items():
+        for kw in kws:
+            if kw in txt:
+                return typ
+
+    return 'News'
+
 async def fetch_json(session: aiohttp.ClientSession, url: str) -> dict:
     headers = { 'User-Agent': 'Athena-Sentinel-Scraper/1.0 (+https://example.local)' }
     try:
@@ -284,8 +318,9 @@ async def process_rss(session: aiohttp.ClientSession, db, url: str, counters: di
                             except Exception:
                                 pass
                     continue
+            # infer type from tags and text (do not default all feeds to 'News')
+            type_ = infer_type_from_text((title or '') + ' ' + (summary or ''), tags)
             severity = 'Medium'
-            type_ = 'News'
             t = await create_threat(db, title=(title or '')[:250], description=(summary or '')[:2000], type_=type_, severity=severity, source=url, tags=tags, source_url=link)
             created.append({'id': t.id, 'url': link})
             counters['inserted'] = counters.get('inserted', 0) + 1
