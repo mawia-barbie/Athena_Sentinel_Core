@@ -78,6 +78,7 @@ import app.api.routes.dashboard as dashboard
 import app.api.routes.live_feed as live_feed
 import app.api.routes.alerts as alerts
 import app.api.routes.analytics as analytics
+import app.api.routes.ai as ai
 
 from app.api.routes import threats_router
 
@@ -88,6 +89,7 @@ app.include_router(dashboard.router, prefix='/api/dashboard')
 app.include_router(live_feed.router, prefix='/api/live')
 app.include_router(alerts.router, prefix='/api/alerts')
 app.include_router(analytics.router, prefix='/api/analytics')
+app.include_router(ai.router, prefix='/api/ai')
 app.include_router(threats_router, prefix='/api/threats')
 
 
