@@ -24,6 +24,30 @@ function App() {
     }
   }
 
+  // simple client-side auth: user stored in localStorage by Register/Login mocks
+  const currentUser = JSON.parse(localStorage.getItem('user') || 'null')
+  const isAuthenticated = !!currentUser
+
+  // If not authenticated, only allow /login and /register routes
+  if (!isAuthenticated && route !== '/login' && route !== '/register') {
+    // ensure the URL shows /login when unauthenticated (e.g. opening '/')
+    if (route !== '/login') {
+      window.history.replaceState({}, '', '/login')
+      setRoute('/login')
+    }
+    return <Login navigate={navigate} />
+  }
+
+  // If authenticated and user navigates to login/register, redirect to dashboard
+  if (isAuthenticated && (route === '/login' || route === '/register')) {
+    // set route to dashboard and render it
+    if (route !== '/dashboard') {
+      window.history.replaceState({}, '', '/dashboard')
+      setRoute('/dashboard')
+    }
+    return <Dashboard navigate={navigate} />
+  }
+
   if (route === '/login') return <Login navigate={navigate} />
   if (route === '/register') return <Register navigate={navigate} />
   if (route === '/threats') return <Threats navigate={navigate} />
