@@ -69,6 +69,34 @@ async def list_threats(db: AsyncSession, type_: Optional[str] = None, limit: int
     logger.info("list_threats type=%s returned %s items", type_, len(items))
     return items
 
+async def type_distribution(db: AsyncSession, days: int = 7):
+    """Return a mapping of Threat.type -> count for threats created within the last `days` days."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    q = select(Threat.type, func.count(Threat.id)).where(Threat.created_at >= cutoff).group_by(Threat.type)
+    res = await db.execute(q)
+    rows = res.all()
+    dist = { r[0]: int(r[1]) for r in rows }
+    logger.info("type_distribution days=%s result=%s", days, dist)
+    return dist
+
+async def vulnerability_distribution(db: AsyncSession, days: int = 7, limit: int = 20):
+    """Return top vulnerabilities (external_id + title) and their counts within the last `days` days."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    q = select(Threat.external_id, Threat.title, func.count(Threat.id)).where(Threat.type == 'Vulnerability').where(Threat.created_at >= cutoff).group_by(Threat.external_id, Threat.title).order_by(desc(func.count(Threat.id))).limit(limit)
+    res = await db.execute(q)
+    rows = res.all()
+    # return mapping external_id (or title) -> count, include title in payload if external_id missing
+    result = []
+    for r in rows:
+        ext = r[0] or r[1]
+        title = r[1]
+        count = int(r[2])
+        result.append({ 'external_id': ext, 'title': title, 'count': count })
+    logger.info("vulnerability_distribution days=%s result_count=%s", days, len(result))
+    return result
+
 async def metrics(db: AsyncSession):
     # total threats
     total_q = await db.execute(select(func.count(Threat.id)))
